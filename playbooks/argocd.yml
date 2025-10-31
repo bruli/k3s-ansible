@@ -100,3 +100,5 @@
     - name: Show apps names
       ansible.builtin.debug:
         msg: "{{ apps_list.resources | map(attribute='metadata.name') | list }}"
+
+- import_playbook: argocd-set-password.yml
