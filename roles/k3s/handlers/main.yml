@@ -1,0 +1,17 @@
+
+- name: reload systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart k3s
+  become: true
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+
+- name: restart k3s-agent
+  become: true
+  ansible.builtin.systemd:
+    name: k3s-agent
+    state: restarted

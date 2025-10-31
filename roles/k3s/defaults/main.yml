@@ -1,0 +1,11 @@
+
+k3s_bin_path: /usr/local/bin/k3s
+k3s_install_script: /usr/local/src/get-k3s.sh
+k3s_systemd_env_dir: /etc/systemd/system
+k3s_need_upgrade: true
+
+k3s_desired_version: ""
+k3s_channel: "stable"
+k3s_server_ip: "127.0.0.1"
+k3s_extra_server_args: ""
+k3s_extra_agent_args: ""

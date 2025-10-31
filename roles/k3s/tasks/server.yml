@@ -1,0 +1,145 @@
+- name: Only for check mode. Simulate to install server
+  when: ansible_check_mode
+  ansible.builtin.debug:
+    msg: "Installing/updating K3s server if should (simulation mode)."
+  changed_when: false
+
+- name: Install/update K3s server (real execution)
+  check_mode: no
+  when: k3s_need_upgrade and not ansible_check_mode
+  become: true
+  ansible.builtin.shell: |
+    set -o pipefail
+    K3S_TOKEN="{{ k3s_token | default('') }}" \
+    {{ desired_version_arg }} {{ desired_channel_arg }} \
+    INSTALL_K3S_EXEC="server {{ k3s_extra_server_args | default('') }}" \
+    {{ k3s_install_script }} 2>&1 | tee /tmp/k3s_install_server.log
+  args:
+    executable: /bin/bash
+    chdir: /usr/local/src
+  register: k3s_install_out
+  changed_when: "'k3s is up to date' not in (k3s_install_out.stdout | default('') | lower)"
+  failed_when: >
+    (k3s_install_out.rc | default(0)) != 0
+    and ('k3s is up to date' not in (k3s_install_out.stdout | default('') | lower))
+
+- name: Check version after to install (server)
+  become: true
+  ansible.builtin.shell: |
+    if [ -x "{{ k3s_bin_path }}" ]; then
+      {{ k3s_bin_path }} --version | awk '{print $3}'
+    else
+      echo "absent"
+    fi
+  args: { executable: /bin/bash }
+  register: k3s_new_version
+  changed_when: false
+  failed_when: false
+
+- name: Check change if the version was changed (server)
+  ansible.builtin.debug:
+    msg: "K3s server: {{ k3s_current_version.stdout }} -> {{ k3s_new_version.stdout }}"
+  changed_when: k3s_current_version.stdout != k3s_new_version.stdout
+
+- name: Check if system kubeconfig exists
+  become: true
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/k3s.yaml
+  register: kubeconfig_system
+  changed_when: false
+
+- name: Create folder ~/.kube with permissions
+  become: true
+  when: kubeconfig_system.stat.exists
+  ansible.builtin.file:
+    path: "{{ kube_home | default('/home/pablo') }}/.kube"
+    state: directory
+    owner: "{{ kube_owner | default('pablo') }}"
+    group: "{{ kube_group | default('pablo') }}"
+    mode: '0750'
+
+- name: Copy kubeconfig from system at .kube/config (only if exists)
+  become: true
+  when: kubeconfig_system.stat.exists
+  ansible.builtin.copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "{{ kubeconfig_target_path | default('/home/pablo/.kube/config') }}"
+    owner: "{{ kube_owner | default('pablo') }}"
+    group: "{{ kube_group | default('pablo') }}"
+    mode: '0600'
+    remote_src: true
+
+- name: Replace 127.0.0.1 for IP from master to kubeconfig (idempotent)
+  become: true
+  when: kubeconfig_system.stat.exists
+  ansible.builtin.replace:
+    path: "{{ kubeconfig_target_path | default('/home/pablo/.kube/config') }}"
+    regexp: 'server:\s+https://127\.0\.0\.1:\d+'
+    replace: "server: https://{{ (k3s_server_ip | default('127.0.0.1')) }}:6443"
+
+- name: Check access with kubectl
+  become: true
+  become_user: "{{ kube_owner | default('pablo') }}"
+  when: kubeconfig_system.stat.exists
+  changed_when: false
+  failed_when: false
+  ansible.builtin.command: >
+    bash -lc "kubectl --kubeconfig {{ kubeconfig_target_path | default('/home/pablo/.kube/config') }} get nodes -o name"
+  register: _kubectl_test
+
+- name: Create local folder for kubeconfigs
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.file:
+    path: "{{ lookup('env','HOME') }}/kubeconfigs"
+    state: directory
+    mode: '0700'
+    owner: "{{ kube_owner | default('pablo') }}"
+    group: "{{ kube_group | default('pablo') }}"
+
+- name: Copy kubeconfig at $HOME local (only if exists)
+  become: true
+  when: kubeconfig_system.stat.exists
+  ansible.builtin.fetch:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "{{ lookup('env','HOME') }}/kubeconfigs/{{ inventory_hostname }}.k3s.yaml"
+    flat: true
+
+- name: Check if kubeconfig already exists in local
+  delegate_to: localhost
+  ansible.builtin.stat:
+    path: "{{ lookup('env','HOME') }}/kubeconfigs/{{ inventory_hostname }}.k3s.yaml"
+  register: kubeconfig_local
+
+- name: Defining server line desired
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.set_fact:
+    _kubeconfig_desired_server: "server: https://{{ (k3s_server_ip | default('127.0.0.1')) }}:6443"
+
+- name: Check if sever is right → {{ k3s_server_ip }})
+  delegate_to: localhost
+  ansible.builtin.command: >
+    bash -lc "grep -Fqx '{{ _kubeconfig_desired_server }}' '{{ lookup('env','HOME') }}/kubeconfigs/{{ inventory_hostname }}.k3s.yaml'"
+  register: _kubeconfig_ok
+  changed_when: false
+  failed_when: false
+
+- name: Check if there is already loopback (127.0.0.1) at kubeconfig
+  delegate_to: localhost
+  ansible.builtin.command: >
+    bash -lc "grep -Eq 'server: https://127\.0\.0\.1:[0-9]+' '{{ lookup('env','HOME') }}/kubeconfigs/{{ inventory_hostname }}.k3s.yaml'"
+  register: _kubeconfig_has_loopback
+  changed_when: false
+  failed_when: false
+
+- name: Adapting 'server' at downloaded kubeconfig (idempotent)
+  delegate_to: localhost
+  when:
+    - kubeconfig_local.stat.exists
+    - _kubeconfig_ok.rc != 0
+    - _kubeconfig_has_loopback.rc == 0
+  ansible.builtin.replace:
+    path: "{{ lookup('env','HOME') }}/kubeconfigs/{{ inventory_hostname }}.k3s.yaml"
+    regexp: 'server: https://127\.0\.0\.1:\d+'
+    replace: "server: https://{{ (k3s_server_ip | default('127.0.0.1')) }}:6443"

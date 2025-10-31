@@ -1,0 +1,82 @@
+
+---
+- name: Assert k3s_server_ip definit i no loopback
+  ansible.builtin.assert:
+    that:
+      - k3s_server_ip is defined
+      - k3s_server_ip not in ['127.0.0.1', 'localhost', '::1']
+    fail_msg: "k3s_server_ip mal definit (loopback o indefinit)."
+
+- name: Check access to .k3s.io
+  ansible.builtin.command: bash -lc "curl -sSfL https://get.k3s.io -o /dev/null --max-time 20"
+  register: k3sio_check
+  changed_when: false
+  failed_when: k3sio_check.rc != 0
+
+- name: Check connection to master (6443)
+  ansible.builtin.command: >
+    bash -lc "curl -sk https://{{ k3s_server_ip }}:6443/ping --max-time 5"
+  register: apiserver_ping
+  changed_when: false
+  failed_when: "'pong' not in apiserver_ping.stdout"
+
+- name: For check mode. Simulate to install agent
+  when: ansible_check_mode
+  ansible.builtin.debug:
+    msg: >-
+      Installing k3s agent with:
+      K3S_URL=https://{{ k3s_server_ip }}:6443, K3S_TOKEN=(ocult),
+      version='{{ k3s_desired_version | default('') }}', channel='{{ k3s_channel | default('stable') }}'
+  changed_when: false
+
+- name: Required asserts for agent
+  ansible.builtin.assert:
+    that:
+      - (k3s_server_ip | default('')) | length > 0
+      - (k3s_token | default('')) | length > 0
+    fail_msg: "Falten k3s_server_ip o k3s_token. Assegura instal·lar el server i publicar el token."
+
+- name: Install/update K3s agent (execució real)
+  check_mode: no
+  when: k3s_need_upgrade and not ansible_check_mode
+  become: true
+  ansible.builtin.shell: |
+    set -o pipefail
+    {{ desired_version_arg }} {{ desired_channel_arg }} \
+    K3S_URL="https://{{ k3s_server_ip }}:6443" \
+    K3S_TOKEN="{{ k3s_token }}" \
+    INSTALL_K3S_EXEC="agent {{ k3s_extra_agent_args | default('') }}" \
+    {{ k3s_install_script }} 2>&1 | tee /tmp/k3s_install_agent.log
+  args:
+    executable: /bin/bash
+    chdir: /usr/local/src
+  register: k3s_install_out
+  changed_when: "'k3s is up to date' not in (k3s_install_out.stdout | default('') | lower)"
+  failed_when: >
+    (k3s_install_out.rc | default(0)) != 0
+    and ('k3s is up to date' not in (k3s_install_out.stdout | default('') | lower))
+
+- name: Detecting version before to install (agent)
+  become: true
+  ansible.builtin.shell: |
+    if [ -x "{{ k3s_bin_path }}" ]; then
+      {{ k3s_bin_path }} --version | awk '{print $3}'
+    else
+      echo "absent"
+    fi
+  args: { executable: /bin/bash }
+  register: k3s_new_version
+  changed_when: false
+  failed_when: false
+
+- name: Set changes if the version was changed (agent)
+  ansible.builtin.debug:
+    msg: "K3s agent: {{ k3s_current_version.stdout }} -> {{ k3s_new_version.stdout }}"
+  changed_when: k3s_current_version.stdout != k3s_new_version.stdout
+
+- name: Be sure k3s-agent is active and running
+  become: true
+  ansible.builtin.systemd:
+    name: k3s-agent
+    enabled: true
+    state: started

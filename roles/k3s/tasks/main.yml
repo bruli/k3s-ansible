@@ -1,0 +1,52 @@
+- name: Define  versin/channel flags for instalation script
+  ansible.builtin.set_fact:
+    desired_version_arg: "{{ 'INSTALL_K3S_VERSION=' ~ (k3s_desired_version | trim) if (k3s_desired_version | default('') | trim | length) > 0 else '' }}"
+    desired_channel_arg: "{{ 'INSTALL_K3S_CHANNEL=' ~ (k3s_channel | default('stable')) if (k3s_desired_version | default('') | trim | length) == 0 else '' }}"
+
+- ansible.builtin.import_tasks: prereqs.yml
+  tags: [prereqs]
+
+- ansible.builtin.import_tasks: upgrade.yml
+  tags: [upgrade]
+
+- name: Select server path
+  ansible.builtin.include_tasks:
+    file: server.yml
+  when:
+    - (k3s_role | default('server')) == 'server'
+    - (groups['masters'] is defined) and (inventory_hostname in groups['masters'])
+
+- name: Waiting API server (readyz)
+  ansible.builtin.command: k3s kubectl get --raw=/readyz
+  register: api_ready
+  retries: 30
+  delay: 5
+  until: api_ready.rc == 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: groups['masters'] is defined
+
+- name: Read server node-token
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: node_token_b64
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: groups['masters'] is defined
+
+- name: Publish k3s_token to hosts
+  ansible.builtin.set_fact:
+    k3s_token: "{{ node_token_b64.content | b64decode | trim }}"
+  run_once: true
+  when: node_token_b64 is defined
+
+- name: Select agent path
+  ansible.builtin.include_tasks:
+    file: agent.yml
+  when:
+    - (k3s_role | default('server')) != 'server'
+    - (groups['workers'] is defined) and (inventory_hostname in groups['workers'])
+    - (k3s_token | default('')) | length > 0
+
+- ansible.builtin.import_tasks: longhorn_prereqs.yml
+  tags: [longhorn, prereqs]

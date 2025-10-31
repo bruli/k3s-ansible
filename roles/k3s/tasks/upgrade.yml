@@ -1,0 +1,31 @@
+
+- name: Check actual version is already installed
+  become: true
+  ansible.builtin.shell: |
+    if [ -x "{{ k3s_bin_path }}" ]; then
+      {{ k3s_bin_path }} --version | awk '{print $3}'
+    else
+      echo "absent"
+    fi
+  args: { executable: /bin/bash }
+  register: k3s_current_version
+  changed_when: false
+  failed_when: false
+
+- name: Calculate taget version
+  ansible.builtin.set_fact:
+    k3s_target_version: "{{ (k3s_desired_version | default('')) if (k3s_desired_version | default('') | length > 0) else (k3s_channel | default('stable')) }}"
+
+- name: Decide if could be upgraded a second version
+  ansible.builtin.set_fact:
+    k3s_need_upgrade: >-
+      {{
+        (
+          (k3s_current_version.stdout != 'absent')
+          and (k3s_desired_version | default('') | length > 0)
+          and (k3s_current_version.stdout != (k3s_desired_version | default('')))
+        )
+        or (k3s_current_version.stdout == 'absent')
+        or ((k3s_desired_version | default('') | length == 0))
+      }}
+  when: k3s_need_upgrade

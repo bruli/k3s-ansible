@@ -1,0 +1,38 @@
+- hosts: masters
+  become: true
+  vars:
+    k3s_role: server
+  roles:
+    - k3s
+  tasks:
+    - name: Waiting API ready
+      command: k3s kubectl get --raw=/readyz
+      register: api_ready
+      retries: 30
+      delay: 5
+      until: api_ready.rc == 0
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+
+    - name: Reading node-token from master
+      no_log: true
+      become: true
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: _k3s_token_slurp
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+
+    - name: Publish token for the next execution
+      no_log: true
+      ansible.builtin.set_stats:
+        data:
+          k3s_node_token_value: "{{ _k3s_token_slurp.content | b64decode | trim }}"
+
+- hosts: workers
+  become: true
+  vars:
+    k3s_role: agent
+    k3s_token: "{{ k3s_node_token_value }}"
+  roles:
+    - k3s

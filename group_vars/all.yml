@@ -1,0 +1,18 @@
+
+k3s_channel: "stable"
+k3s_desired_version: ""
+k3s_server_ip: "192.168.1.14"
+k3s_extra_agent_args: "--node-label role=worker"
+
+k3s_extra_server_args: >
+  --write-kubeconfig /home/pablo/.kube/config
+  --write-kubeconfig-mode 640
+  --write-kubeconfig-group pablo
+  --tls-san {{ k3s_server_ip }}
+  --node-ip {{ k3s_server_ip }}
+  --advertise-address {{ k3s_server_ip }}
+
+kube_owner: "pablo"
+kube_group: "pablo"
+kube_home: "/home/pablo"
+kubeconfig_target_path: "{{ kube_home }}/.kube/config"

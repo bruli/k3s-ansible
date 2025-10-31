@@ -1,0 +1,7 @@
+
+- hosts: masters
+  become: true
+  vars:
+    k3s_role: server
+  roles:
+    - k3s

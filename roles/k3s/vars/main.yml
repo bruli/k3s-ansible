@@ -1,0 +1,5 @@
+
+desired_version_arg: >-
+  {{ ('INSTALL_K3S_VERSION=' + (k3s_desired_version | default(''))) if (k3s_desired_version | default('') | length > 0) else '' }}
+desired_channel_arg: >-
+  {{ ('INSTALL_K3S_CHANNEL=' + (k3s_channel | default('stable'))) if ((k3s_desired_version | default('') | length == 0) and (k3s_channel | default('') | length > 0)) else '' }}

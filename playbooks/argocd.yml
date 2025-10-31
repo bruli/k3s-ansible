@@ -1,0 +1,102 @@
+---
+- name: Install Argo CD via Helm + bootstrap root
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    argocd_namespace: argocd
+    argocd_chart_version: ""          # buit = última versió del chart
+    argocd_service_type: NodePort
+    kubeconfig_local: "{{ lookup('env','HOME') + '/.kube/config' }}"
+    gitops_repo_url: "https://github.com/bruli/k3s-infra.git"
+    gitops_branch: "main"
+
+  tasks:
+    - name: Create Argo CD namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_local }}"
+        api_version: v1
+        kind: Namespace
+        name: "{{ argocd_namespace }}"
+
+    - name: Add Argo Helm repository
+      kubernetes.core.helm_repository:
+        name: argo
+        repo_url: https://argoproj.github.io/argo-helm
+
+    - name: Deploy/upgrade Argo CD
+      kubernetes.core.helm:
+        kubeconfig: "{{ kubeconfig_local }}"
+        name: argo-cd
+        chart_ref: argo/argo-cd
+        release_namespace: "{{ argocd_namespace }}"
+        wait: true
+        timeout: "10m"
+        values:
+          server:
+            service:
+              type: "{{ argocd_service_type }}"
+          controller:
+            metrics:
+              enabled: true
+          repoServer:
+            metrics:
+              enabled: true
+          applicationSet:
+            enabled: true
+
+    - name: Create root Application (App-of-Apps)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_local }}"
+        state: present
+        definition: "{{ lookup('template', playbook_dir + '/../templates/root-app.yaml.j2') }}"
+
+    - name: Force hard refresh on root app
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_local }}"
+        state: present
+        definition:
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: root
+            namespace: "{{ argocd_namespace }}"
+            annotations:
+              argocd.argoproj.io/refresh: "hard"
+
+    - name: Wait until root app is Healthy (allow SharedResourceWarning)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_local }}"
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: root
+        namespace: "{{ argocd_namespace }}"
+      register: root_info
+      until: >
+        (root_info.resources | length) > 0 and
+        (root_info.resources[0].status.health.status | default('')) == 'Healthy' and
+        (
+          (root_info.resources[0].status.sync.status | default('')) == 'Synced'
+          or
+          (
+            root_info.resources[0].status.conditions | default([]) |
+            selectattr('type','equalto','SharedResourceWarning') | list | length
+          ) > 0
+        )
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Listening applications managed by Argo CD (sanity check)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig_local }}"
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ argocd_namespace }}"
+      register: apps_list
+      changed_when: false
+
+    - name: Show apps names
+      ansible.builtin.debug:
+        msg: "{{ apps_list.resources | map(attribute='metadata.name') | list }}"

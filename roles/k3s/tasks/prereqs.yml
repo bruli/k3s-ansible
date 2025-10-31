@@ -1,0 +1,22 @@
+
+- name: Ensuring basic packages
+  become: true
+  ansible.builtin.package:
+    name:
+      - curl
+      - ca-certificates
+    state: present
+
+- name: Checking if installation script already exists
+  ansible.builtin.stat:
+    path: "{{ k3s_install_script }}"
+  register: k3s_installer_stat
+
+- name: Download installation k3s script (only if does not exists)
+  become: true
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: "{{ k3s_install_script }}"
+    mode: '0755'
+    force: false
+  when: not k3s_installer_stat.stat.exists

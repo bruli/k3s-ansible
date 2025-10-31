@@ -1,0 +1,133 @@
+---
+- name: Neteja completa de K3s (server i agents)
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    purge_iptables: true
+    purge_kubeconfigs: false
+    reboot_after_cleanup: true
+  tasks:
+    - name: Comprovar si existeix script oficial d'uninstall (server)
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s-uninstall.sh
+      register: k3s_uninstall_server
+    - name: Comprovar si existeix script oficial d'uninstall (agent)
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s-agent-uninstall.sh
+      register: k3s_uninstall_agent
+    - name: Executar uninstall oficial (server) si existeix
+      ansible.builtin.shell: /usr/local/bin/k3s-uninstall.sh
+      when: k3s_uninstall_server.stat.exists
+      tags:
+        - k3s-clean
+        - k3s-uninstall
+    - name: Executar uninstall oficial (agent) si existeix
+      ansible.builtin.shell: /usr/local/bin/k3s-agent-uninstall.sh
+      when: k3s_uninstall_agent.stat.exists
+      tags:
+        - k3s-clean
+        - k3s-uninstall
+    - name: Aturar serveis k3s / k3s-agent si existeixen
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - k3s
+        - k3s-agent
+      failed_when: false
+      tags:
+        - k3s-clean
+    - name: Esborrar unitats systemd de k3s
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/k3s.service
+        - /etc/systemd/system/k3s-agent.service
+        - /etc/systemd/system/k3s.service.env
+        - /etc/systemd/system/k3s-agent.service.env
+      tags:
+        - k3s-clean
+    - name: Esborrar binaris i scripts k3s (si queden)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/bin/k3s
+        - /usr/local/bin/k3s-killall.sh
+        - /usr/local/bin/k3s-uninstall.sh
+        - /usr/local/bin/k3s-agent-uninstall.sh
+      tags:
+        - k3s-clean
+    - name: Esborrar directoris i estat de k3s
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher
+        - /var/lib/rancher
+        - /var/lib/kubelet
+        - /var/lib/cni
+        - /run/k3s
+      tags:
+        - k3s-clean
+    - name: Reload de systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      tags:
+        - k3s-clean
+    - name: Esborrar interfícies de xarxa CNI comunes (si existeixen)
+      ansible.builtin.command: ip link delete {{ item }}
+      register: del_link
+      changed_when: del_link.rc == 0
+      failed_when: false
+      loop:
+        - cni0
+        - flannel.1
+        - flannel-v6.1
+        - vxlan.calico
+      tags:
+        - k3s-clean
+        - net-clean
+    - name: Netejar iptables (chains filter/nat/mangle) — opcional
+      ansible.builtin.shell: |
+        iptables -F
+        iptables -t nat -F
+        iptables -t mangle -F
+        iptables -X
+      when: purge_iptables
+
+      tags:
+        - k3s-clean
+        - net-clean
+    - name: Netejar kubeconfigs d'usuaris (~/.kube/config) — opcional
+      ansible.builtin.shell: |
+        for h in /home/*; do
+          [ -d "$h/.kube" ] && rm -rf "$h/.kube";
+        done
+        [ -d "/root/.kube" ] && rm -rf "/root/.kube"
+      when: purge_kubeconfigs
+      tags:
+        - k3s-clean
+    - name: Mostrar estat final de serveis
+      ansible.builtin.shell: |
+        systemctl status k3s 2>&1 | head -n 3 || true
+        systemctl status k3s-agent 2>&1 | head -n 3 || true
+      register: svc_status
+      changed_when: false
+      tags:
+        - k3s-clean
+    - name: Debug estat serveis
+      ansible.builtin.debug:
+        msg: "{{ svc_status.stdout_lines }}"
+      tags:
+        - k3s-clean
+    - name: Reiniciar el node (opcional i recomanat després de la neteja)
+      ansible.builtin.reboot:
+        msg: Reinici post-neteja de K3s
+        reboot_timeout: 600
+      when: reboot_after_cleanup
+      tags:
+        - k3s-clean
