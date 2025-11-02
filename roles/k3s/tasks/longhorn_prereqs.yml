@@ -1,63 +1,45 @@
-- name: Updating packages índex
+- name: Longhorn prerequisites (iSCSI) for all nodes
   become: true
-  ansible.builtin.apt:
-    update_cache: yes
-    cache_valid_time: 3600
   tags: [longhorn, prereqs]
+  block:
+    - name: Update APT index (safe)
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
 
-- name: Install open-iscsi and nfs-common
-  become: true
-  ansible.builtin.apt:
-    name:
-      - open-iscsi
-      - nfs-common
-    state: present
-  tags: [longhorn, prereqs]
+    - name: Install open-iscsi and nfs-common
+      ansible.builtin.apt:
+        name:
+          - open-iscsi
+          - nfs-common
+        state: present
 
-- name: Start iscsid
-  become: true
-  ansible.builtin.systemd:
-    name: iscsid
-    enabled: true
-    state: started
-  tags: [longhorn, prereqs]
+    - name: Ensure iscsid service is enabled and running
+      ansible.builtin.systemd:
+        name: iscsid
+        enabled: true
+        state: started
 
-- name: (Opcional) Activating open-iscsi if exists
-  become: true
-  ansible.builtin.systemd:
-    name: open-iscsi
-    enabled: true
-    state: started
-  register: openiscsi_unit
-  failed_when: false
-  changed_when: openiscsi_unit is changed
-  tags: [longhorn, prereqs]
+    - name: (Optional) Enable open-iscsi service if it exists
+      ansible.builtin.systemd:
+        name: open-iscsi
+        enabled: true
+        state: started
+      register: openiscsi_unit
+      failed_when: false
+      changed_when: openiscsi_unit is changed
 
-- name: Applying kernel module iscsi_tcp
-  become: true
-  ansible.builtin.modprobe:
-    name: iscsi_tcp
-    state: present
-  tags: [longhorn, prereqs]
+    - name: Load iscsi_tcp kernel module now and persist across reboots
+      community.general.modprobe:
+        name: iscsi_tcp
+        state: present
+        persistent: present
 
-- name: Check d'iscsi_tcp at boot
-  become: true
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/iscsi.conf
-    content: "iscsi_tcp\n"
-    owner: root
-    group: root
-    mode: '0644'
-  tags: [longhorn, prereqs]
+    - name: Verify iscsi_tcp module is loaded
+      ansible.builtin.command: lsmod
+      register: lsmod_output
+      changed_when: false
 
-- name: Check iscsi_tcp is done
-  become: true
-  ansible.builtin.command: lsmod
-  register: lsmod_output
-  changed_when: false
-  tags: [longhorn, prereqs]
-
-- name: Show check of iscsi_tcp
-  ansible.builtin.debug:
-    msg: "{{ lsmod_output.stdout_lines | select('search', '^iscsi_tcp\\s') | list }}"
-  tags: [longhorn, prereqs]
+    - name: Show iscsi_tcp match in lsmod output
+      ansible.builtin.debug:
+        msg: "{{ lsmod_output.stdout_lines | select('search', '^iscsi_tcp\\s') | list }}"

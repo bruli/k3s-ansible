@@ -71,6 +71,7 @@
         - /var/lib/kubelet
         - /var/lib/cni
         - /run/k3s
+        - /var/lib/longhorn
       tags:
         - k3s-clean
     - name: Reload de systemd
