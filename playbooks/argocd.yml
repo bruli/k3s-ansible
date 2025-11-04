@@ -46,7 +46,7 @@
           applicationSet:
             enabled: true
 
-    - name: Create root Application (App-of-Apps)
+    - name: Create root ApplicationSet (App-of-Apps via kustomize discovery)
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig_local }}"
         state: present
