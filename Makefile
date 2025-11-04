@@ -10,7 +10,7 @@ KUBECTL ?= kubectl
 # Namespace on despleguem Argo CD
 ARGOCD_NAMESPACE ?= argocd
 
-.PHONY: check-kubeconfig k3s-clean k3s-install check-kubeconfig argocd-deps argocd-install edit-vault help
+.PHONY: check-kubeconfig k3s-clean k3s-install check-kubeconfig argocd-deps argocd-install edit-vault help cloudflared-secret
 
 check-kubeconfig:
 	@if [ ! -f "$(KUBECONFIG)" ]; then \
@@ -45,6 +45,11 @@ edit-vault:
 	@set -euo pipefail; \
     echo "🏗️  Editing vault file"; \
    	$(VAULT) edit group_vars/all/vault.yml
+
+cloudflared-secret:
+	@set -euo pipefail; \
+    echo "🏗️  Writing cloudflared secret"; \
+    $(ANSIBLE) playbooks/cloudflared-secret.yml
 
 help:
 	@echo "Available commands:"
